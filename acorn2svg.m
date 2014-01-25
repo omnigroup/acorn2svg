@@ -492,7 +492,7 @@ CFDataRef copyLayerBlob(sqlite3 *dbh, NSData *oid)
         CFRelease(filename);
         if(!CFURLResourceIsReachable(tmpname, NULL))
             break;
-	CFRelease(tmpname);
+        CFRelease(tmpname);
     }
     if (extn)
         CFRelease(extn);
@@ -622,7 +622,7 @@ void generateSVGForShape(NSDictionary *obj, CGFloat fheight, NSXMLElement *paren
     
     /* TODO: Deal with fheight */
 
-    warnf(@"Shapey shape: %@", [obj description]);
+    // warnf(@"Shapey shape: %@", [obj description]);
     
     NSString *cls = [obj objectForKey:akGraphicClass];
     if (!cls)
@@ -708,7 +708,7 @@ void generateSVGForTextArea(NSDictionary *obj, CGFloat fheight, NSXMLElement *pa
         NSFont *spanFont = [attrs objectForKey:NSFontAttributeName];
         NSColor *spanColor = [attrs objectForKey:NSForegroundColorAttributeName];
 
-	/* Now find all line fragments which contain glyphs from this span of characters. */
+        /* Now find all line fragments which contain glyphs from this span of characters. */
         NSRange glyphRangeOfInterest = [textSetter glyphRangeForCharacterRange:range actualCharacterRange:NULL];
         NSUInteger nextGlyphToFind = glyphRangeOfInterest.location;
         while (nextGlyphToFind < glyphRangeOfInterest.location + glyphRangeOfInterest.length) {
@@ -726,7 +726,7 @@ void generateSVGForTextArea(NSDictionary *obj, CGFloat fheight, NSXMLElement *pa
                 lineFragmentRange.location = nextGlyphToFind;
             }
             
-	    /* Map our glyph run back to a character range. */
+            /* Map our glyph run back to a character range. */
             NSRange runCharRange = [textSetter characterRangeForGlyphRange:lineFragmentRange actualGlyphRange:NULL];
             if (runCharRange.length == 0) {
                 nextGlyphToFind = lineFragmentRange.location + lineFragmentRange.length;
@@ -743,7 +743,7 @@ void generateSVGForTextArea(NSDictionary *obj, CGFloat fheight, NSXMLElement *pa
                 endGlyphIndexToCareAboutPositioning = lineFragmentRange.location + lineFragmentRange.length;
             }
 
-	    /* Emit a <tspan> element for this character run */
+            /* Emit a <tspan> element for this character run */
             NSXMLElement *span = [[NSXMLElement alloc] initWithName:@"tspan" URI:kSVGNamespace];
             [text addChild:span];
             [span addChild:[NSXMLNode textWithStringValue:[[tstorage string] substringWithRange:runCharRange]]];
@@ -1059,7 +1059,7 @@ NSString *svgOpsFromPath(NSBezierPath *p, NSRect bounds)
         NSString *implicitNextOp;
         NSBezierPathElement op;
         
-        warnf(@" subpath: %d %+d %@", (int)firstElt, (int)eltCount, closed?@"closed":@"open");
+        // warnf(@" subpath: %d %+d %@", (int)firstElt, (int)eltCount, closed?@"closed":@"open");
         
         // Some NSBezierPath convenience methods result in weird zero-length subpaths; we just elide those.
         if (eltCount < 1)

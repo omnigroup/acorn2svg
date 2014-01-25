@@ -1,7 +1,9 @@
 
 #import <Foundation/Foundation.h>
+#import <ImageIO/ImageIO.h>
 #include <sqlite3.h>
 
+/* XML namespaces */
 #define kSVGNamespace @"http://www.w3.org/2000/svg"
 #define kXLINKNamespace @"http://www.w3.org/1999/xlink"
 
