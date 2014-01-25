@@ -60,6 +60,7 @@ unsigned int graphicRefSequence = 0;
 int selectAttribute(sqlite3 *dbh, NSData *layer, const char *attname, void (^)(sqlite3_stmt *, int));
 CFDataRef copyBlobValue(sqlite3_stmt *sth, int column);
 CFStringRef copyStringValue(sqlite3_stmt *sth, int column);
+static int checkApplicationID(void *, int, char **, char **);
 AcornLayer *copyLayerTree(sqlite3 *dbh);
 
 /* Image output/recoding functions */
@@ -97,6 +98,9 @@ int main(int argc, char * const * argv)
         case SQLITE_NOTADB:
             errx(1, "%s: not a sqlite3 db, and therefore not an Acorn file", acorn_filename);
             break;
+        case SQLITE_CANTOPEN:
+            err(1, "%s: cannot open", acorn_filename);
+            break;
         default:
             /* We could use sqlite3_errstr() to give a useful error message, except that Mavericks' sqlite3 is still too old to have that function. */
             errx(1, "%s: cannot open: sqlite3 error #%d", acorn_filename, rv);
@@ -104,6 +108,17 @@ int main(int argc, char * const * argv)
     }
     sqlite3_extended_result_codes(dbh, 1);
     
+    /* Check file magic (SQLite application_id) */
+    if (sqlite3_libversion_number() >= 3007017) {
+        int app_id_ok = 0;
+        char *msg;
+        rv = sqlite3_exec(dbh, "PRAGMA application_id", checkApplicationID, &app_id_ok, &msg);
+        if (msg)
+            warnx("%s", msg);
+        if (rv || !app_id_ok)
+            errx(2, "%s: does not look like an Acorn file", acorn_filename);
+    }
+
     /* Check file version */
     {
         __block int fileVersion;
@@ -174,6 +189,19 @@ int main(int argc, char * const * argv)
     
     sqlite3_close(dbh);
     return 0;
+}
+
+static int checkApplicationID(void *ctxt, int colCount, char **values, char **names)
+{
+    if (colCount != 1 || !values[0])
+        return SQLITE_ABORT;
+    unsigned long magic = strtoul(values[0], NULL, 0);
+    if (magic != 0x4163726E /* 'Acrn' */) {
+        warnx("Incorrect db magic, expected 'Acrn', found %s", values[0]);
+    } else {
+        *(int *)ctxt = 1;
+    }
+    return SQLITE_OK;
 }
 
 int selectAttribute(sqlite3 *dbh, NSData *layer, const char *attname, void (^callback)(sqlite3_stmt *, int))
