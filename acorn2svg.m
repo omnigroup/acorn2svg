@@ -182,7 +182,7 @@ int main(int argc, char * const * argv)
         /* Fix up Apple lameness */
         assignNamespacePrefixes(svgElt);
         
-        NSData *slz = [svgDoc XMLDataWithOptions:NSXMLNodePrettyPrint];
+        NSData *slz = [svgDoc XMLDataWithOptions:NSXMLNodePrettyPrint|NSXMLNodeCompactEmptyElement];
         fwrite([slz bytes], [slz length], 1, stdout);
         fputc('\n', stdout);
     }
@@ -1122,10 +1122,12 @@ NSString *svgOpsFromPath(NSBezierPath *p, NSRect bounds)
             }
             
             if (op == NSLineToBezierPathElement) {
-                if (pBuf[0].x == prevPoint.x) {
+                /* If we're already in relative-lineto mode, switching to v/h doesn't save us anything, and may cost us a mode switch afterwards. So don't do that. */
+                BOOL alreadyRelative = [implicitNextOp isEqualToString:@"l"];
+                if (!alreadyRelative && pBuf[0].x == prevPoint.x) {
                     InsertOp(@"v");
                     [ops addObject:svgStringFromFloat(pBuf[0].y - prevPoint.y, nil)];
-                } else if (pBuf[0].y == prevPoint.y) {
+                } else if (!alreadyRelative && pBuf[0].y == prevPoint.y) {
                     InsertOp(@"h");
                     [ops addObject:svgStringFromFloat(pBuf[0].x - prevPoint.x, nil)];
                 } else {
