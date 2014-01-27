@@ -475,7 +475,7 @@ CFDataRef copyLayerBlob(sqlite3 *dbh, NSData *oid)
              opacity
              */
             
-            if (frame.origin.x != 0 || frame.origin.y != 0) {
+            if (frame.origin.x != 0 || layerFrameTopY != 0) {
                 setFloatAttribute(imageElt, @"x", frame.origin.x);
                 setFloatAttribute(imageElt, @"y", layerFrameTopY);
             }
