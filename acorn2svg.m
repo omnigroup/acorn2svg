@@ -69,12 +69,12 @@ CFURLRef tryWriteImage(CGImageSourceRef src, CFStringRef uti, CFURLRef tmpDir, C
 
 
 /* SVG Generation */
-void generateSVGForShape(NSDictionary *obj, CGFloat fheight, NSXMLElement *parent);
-void generateSVGForRectangle(NSDictionary *obj, CGFloat fheight, NSXMLElement *parent);
-void generateSVGForTextArea(NSDictionary *obj, CGFloat fheight, NSXMLElement *parent);
-void generateSVGForArrow(NSDictionary *obj, CGFloat fheight, NSXMLElement *parent);
-void generateSVGForLine(NSDictionary *obj, CGFloat fheight, NSXMLElement *parent);
-void generateSVGForPathGraphic(NSDictionary *obj, CGFloat fheight, NSXMLElement *parent);
+void generateSVGForShape(NSDictionary *obj, const NSRect *frame, NSXMLElement *parent);
+void generateSVGForRectangle(NSDictionary *obj, const NSRect *frame, NSXMLElement *parent);
+void generateSVGForTextArea(NSDictionary *obj, const NSRect *frame, NSXMLElement *parent);
+void generateSVGForArrow(NSDictionary *obj, const NSRect *frame, NSXMLElement *parent);
+void generateSVGForLine(NSDictionary *obj, const NSRect *frame, NSXMLElement *parent);
+void generateSVGForPathGraphic(NSDictionary *obj, const NSRect *frame, NSXMLElement *parent);
 void generateSVGForShadow(NSDictionary *obj, NSXMLElement *parent, NSXMLElement *element);
 static void generateSVGShadowFilter(const void *, const void *, void *);
 
@@ -83,7 +83,7 @@ void applyPaintForColor(NSXMLElement *elt, NSString *attr, NSString *alpha, NSCo
 void applyLineJoin(NSXMLElement *elt, NSString *attr, NSObject *encodedJoin);
 void applyFillStroke(NSXMLElement *elt, BOOL hasFill, BOOL hasStroke, NSDictionary *obj);
 NSString *filterNameForShadow(NSDictionary *obj);
-NSString *svgOpsFromPath(NSBezierPath *p, NSRect bounds);
+NSString *svgOpsFromPath(NSBezierPath *p, const NSRect *frame);
 
 int main(int argc, char * const * argv)
 {
@@ -156,6 +156,7 @@ int main(int argc, char * const * argv)
         __block CGFloat frameHeight = 0;
         
         setStringAttribute(svgElt, @"version", @"1.0");
+        /* TODO: read and use the dpi attribute */
         selectAttribute(dbh, NULL, "imageSize", ^(sqlite3_stmt *sth, int column){
             CFStringRef frameValue = copyStringValue(sth, column);
             NSSize imageSize = NSSizeFromString((__bridge_transfer NSString *)frameValue);
@@ -450,9 +451,10 @@ CFDataRef copyLayerBlob(sqlite3 *dbh, NSData *oid)
                 errx(1, "Could not parse plist for shape layer");
             }
             
-            if (frame.origin.x != 0 || layerFrameTopY != 0) {
-                setStringAttribute(elt, @"transform", [NSString stringWithFormat:@"translate(%@ %@)", svgStringFromFloat(frame.origin.x, nil), svgStringFromFloat(layerFrameTopY, nil)]);
-            }
+            NSRect layerFrame = (NSRect){
+              .origin = { frame.origin.x, layerFrameTopY },
+              .size = frame.size
+            };
             /* TODO: Do we need to do anything with the frame size? Clip paths? */
             /* TODO: Will this have the right effect if a layer is a child of another layer that has a nonzero origin? */
             
@@ -461,7 +463,7 @@ CFDataRef copyLayerBlob(sqlite3 *dbh, NSData *oid)
              opacity
              */
             
-            generateSVGForShape((__bridge NSDictionary *)value, frame.size.height, elt);
+            generateSVGForShape((__bridge NSDictionary *)value, &layerFrame, elt);
             CFRelease(value);
         } else {
             /* Assume all other UTIs are image types that CGImage can handle */
@@ -631,7 +633,7 @@ NSXMLElement *createImageElementFromData(NSString *uti, CFDataRef layerData, NSS
 
 #pragma mark - Shape layer to SVG conversion
 
-void generateSVGForShape(NSDictionary *obj, CGFloat fheight, NSXMLElement *parent)
+void generateSVGForShape(NSDictionary *obj, const NSRect *frame, NSXMLElement *parent)
 {
     /*
      Shape layer graphic classes:
@@ -648,8 +650,6 @@ void generateSVGForShape(NSDictionary *obj, CGFloat fheight, NSXMLElement *paren
      ShapeImage   (=star?)
     */
     
-    /* TODO: Deal with fheight */
-
     // warnf(@"Shapey shape: %@", [obj description]);
     
     NSString *cls = [obj objectForKey:akGraphicClass];
@@ -661,23 +661,26 @@ void generateSVGForShape(NSDictionary *obj, CGFloat fheight, NSXMLElement *paren
         /* TODO: Process keys other than GraphicsList */
         NSXMLElement *group = [[NSXMLElement alloc] initWithName:@"g" URI:kSVGNamespace];
         [[obj objectForKey:akGraphicsList] enumerateObjectsUsingBlock:^(id child, NSUInteger idx, BOOL *stop) {
-            generateSVGForShape(child, fheight, group);
+            generateSVGForShape(child, frame, group);
         }];
         [parent addChild:group];
     } else if ([cls isEqualToString:@"Rectangle"]) {
-        generateSVGForRectangle(obj, fheight, parent);
+        generateSVGForRectangle(obj, frame, parent);
     } else if ([cls isEqualToString:@"TextArea"]) {
-        generateSVGForTextArea(obj, fheight, parent);
+        generateSVGForTextArea(obj, frame, parent);
     } else if ([cls isEqualToString:@"ArrowShape"]) {
-        generateSVGForArrow(obj, fheight, parent);
+        generateSVGForArrow(obj, frame, parent);
     } else if ([cls isEqualToString:@"Line"]) {
-        generateSVGForLine(obj, fheight, parent);
+        generateSVGForLine(obj, frame, parent);
     } else {
         warnf(@"Warning: unknown Acorn shape class \"%@\", ignoring", cls);
     }
 }
 
-void generateSVGForRectangle(NSDictionary *obj, CGFloat fheight, NSXMLElement *parent)
+#define XLATE_X(xcoord) ( frame->origin.x + (xcoord) )
+#define XLATE_Y(ycoord) ( frame->origin.y - (ycoord) )
+
+void generateSVGForRectangle(NSDictionary *obj, const NSRect *frame, NSXMLElement *parent)
 {
     warnIfUnknownKeys(obj, @[ akGraphicClass, akAntiAlias, akBlendMode, akBounds, akCornerRadius, akCustomStrokeStyleDash, akCustomStrokeStyleGap, akDrawsFill, akDrawsStroke, akFillColor, akGradientConfig, akHasCornerRadius, akHasShadow, akLineJoinStyle, akRotationAngle, akShadowBlurRadius, akShadowColor, akShadowOffset, akStrokeColor, akStrokeLineWidth, akStrokeStyle ]);
     
@@ -691,8 +694,8 @@ void generateSVGForRectangle(NSDictionary *obj, CGFloat fheight, NSXMLElement *p
     [parent addChild:rect];
     
     NSRect bounds = NSRectFromString([obj objectForKey:akBounds]);
-    setFloatAttribute(rect, @"x", bounds.origin.x);
-    setFloatAttribute(rect, @"y", fheight - bounds.origin.y - bounds.size.height);
+    setFloatAttribute(rect, @"x", XLATE_X(bounds.origin.x));
+    setFloatAttribute(rect, @"y", XLATE_Y(bounds.origin.y + bounds.size.height));
     setFloatAttribute(rect, @"width", bounds.size.width);
     setFloatAttribute(rect, @"height", bounds.size.height);
 
@@ -709,7 +712,7 @@ void generateSVGForRectangle(NSDictionary *obj, CGFloat fheight, NSXMLElement *p
     /* TODO: akAntiAlias, akBlendMode, akGradientConfig, akRotationAngle */
 }
 
-void generateSVGForTextArea(NSDictionary *obj, CGFloat fheight, NSXMLElement *parent)
+void generateSVGForTextArea(NSDictionary *obj, const NSRect *frame, NSXMLElement *parent)
 {
     warnIfUnknownKeys(obj, @[ akGraphicClass, akAntiAlias, akBlendMode, akBounds, akCornerRadius, akCustomStrokeStyleDash, akCustomStrokeStyleGap, akDrawsFill, akDrawsStroke, akFillColor, akHasCornerRadius, akHasShadow, akKeepBoundsWhenEditing, akLineJoinStyle, akRTFD, akRotationAngle, akShadowBlurRadius, akShadowColor, akShadowOffset, akStrokeColor, akStrokeStyle, akTextStrokeWidth ]);
     
@@ -719,7 +722,10 @@ void generateSVGForTextArea(NSDictionary *obj, CGFloat fheight, NSXMLElement *pa
     [parent addChild:text];
     
     NSRect bounds = NSRectFromString([obj objectForKey:akBounds]);
-    setStringAttribute(text, @"transform", [NSString stringWithFormat:@"translate(%@ %@)", svgStringFromFloat(bounds.origin.x, nil), svgStringFromFloat(fheight - bounds.origin.y - bounds.size.height, nil)]);
+    setStringAttribute(text, @"transform",
+                       [NSString stringWithFormat:@"translate(%@ %@)",
+                                 svgStringFromFloat(XLATE_X(bounds.origin.x), nil),
+                                 svgStringFromFloat(XLATE_Y(bounds.origin.y + bounds.size.height), nil)]);
     
     NSTextStorage *tstorage = [[NSTextStorage alloc] initWithAttributedString:contents];
     NSTextContainer *box = [[NSTextContainer alloc] initWithContainerSize:bounds.size];
@@ -820,25 +826,25 @@ void generateSVGForTextArea(NSDictionary *obj, CGFloat fheight, NSXMLElement *pa
     /* TODO: akAntiAlias, akBlendMode, akCornerRadius, akCustomStrokeStyleDash, akCustomStrokeStyleGap, akDrawsFill, akDrawsStroke, akFillColor, akHasCornerRadius, akHasShadow, akLineJoinStyle, akRotationAngle, akShadowBlurRadius, akShadowColor, akShadowOffset, akStrokeColor, akStrokeStyle, akTextStrokeWidth */
 }
 
-void generateSVGForArrow(NSDictionary *obj, CGFloat fheight, NSXMLElement *parent)
+void generateSVGForArrow(NSDictionary *obj, const NSRect *frame, NSXMLElement *parent)
 {
     warnIfUnknownKeys(obj, @[ akGraphicClass, akAntiAlias, akBlendMode, akBounds, akCornerRadius, akCustomStrokeStyleDash, akCustomStrokeStyleGap, akDrawsFill, akDrawsStroke, akEndPoint, akFillColor, akHasCornerRadius, akHasShadow, akLineJoinStyle, akPath, akPointLength, akRotationAngle, akShadowBlurRadius, akShadowColor, akShadowOffset, akStartPoint, akStrokeColor, akStrokeLineWidth, akStrokeStyle ]);
 
-    generateSVGForPathGraphic(obj, fheight, parent);
+    generateSVGForPathGraphic(obj, frame, parent);
     
     /* TODO: akRotationAngle */
 }
 
-void generateSVGForLine(NSDictionary *obj, CGFloat fheight, NSXMLElement *parent)
+void generateSVGForLine(NSDictionary *obj, const NSRect *frame, NSXMLElement *parent)
 {
     warnIfUnknownKeys(obj, @[ akGraphicClass, akAntiAlias, akBlendMode, akBounds, akCornerRadius, akCustomStrokeStyleDash, akCustomStrokeStyleGap, akDrawsFill, akDrawsStroke, akFMPath, akFillColor, akHasCornerRadius, akHasShadow, akLineJoinStyle, akPath, akRotationAngle, akShadowBlurRadius, akShadowColor, akShadowOffset, akStrokeColor, akStrokeLineWidth, akStrokeStyle ]);
     
-    generateSVGForPathGraphic(obj, fheight, parent);
+    generateSVGForPathGraphic(obj, frame, parent);
     
     /* TODO: akRotationAngle */
 }
 
-void generateSVGForPathGraphic(NSDictionary *obj, CGFloat fheight, NSXMLElement *parent)
+void generateSVGForPathGraphic(NSDictionary *obj, const NSRect *frame, NSXMLElement *parent)
 {
     NSBezierPath *savedPath = [NSUnarchiver unarchiveObjectWithData:[obj objectForKey:akPath]];
     
@@ -850,7 +856,7 @@ void generateSVGForPathGraphic(NSDictionary *obj, CGFloat fheight, NSXMLElement 
     NSXMLElement *pathElt = [[NSXMLElement alloc] initWithName:@"path" URI:kSVGNamespace];
     generateSVGForShadow(obj, parent, pathElt);
     [parent addChild:pathElt];
-    setStringAttribute(pathElt, @"d", svgOpsFromPath(savedPath, (NSRect){{0, 0}, {0, fheight}}));
+    setStringAttribute(pathElt, @"d", svgOpsFromPath(savedPath, frame));
     applyFillStroke(pathElt, fills, strokes, obj);
     
     /* TODO: akAntiAlias, akBlendMode, akCornerRadius, akHasCornerRadius */
@@ -1075,11 +1081,13 @@ NSString *fmtPoint(NSPoint p)
     return [NSString stringWithFormat:@"%@ %@", svgStringFromFloat(p.x, nil), svgStringFromFloat(p.y, nil)];
 }
 
-NSString *svgOpsFromPath(NSBezierPath *p, NSRect bounds)
+NSString *svgOpsFromPath(NSBezierPath *p, const NSRect *frame)
 {
     NSMutableArray *ops = [[NSMutableArray alloc] init];
-    
-#define fliplate(p) (p).y = (bounds.origin.y + bounds.size.height) - (p).y; (p).x += bounds.origin.x;
+    CGFloat leftX = frame->origin.x;
+    CGFloat topY = frame->origin.y;
+
+#define fliplate(p) (p).y = topY - (p).y; (p).x += leftX;
     
     enumerateSubpaths(p, ^(NSInteger firstElt, NSInteger eltCount, BOOL closed){
         NSPoint pBuf[3];
