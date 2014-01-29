@@ -804,15 +804,17 @@ void generateSVGForTextArea(NSDictionary *obj, const NSRect *frame, NSXMLElement
 
             /* We don't need to flip our coordinates further here: Apple's text system measures coordinates from the top edge of the text container. */
             if (simpleGlyphRange.location + simpleGlyphRange.length < endGlyphIndexToCareAboutPositioning) {
-                NSMutableString *xs = [[NSMutableString alloc] init];
-                NSMutableString *ys = [[NSMutableString alloc] init];
+                NSMutableArray *xs = [[NSMutableArray alloc] init];
+                NSMutableArray *ys = [[NSMutableArray alloc] init];
                 for(NSUInteger charIndex = runCharRange.location; charIndex < (runCharRange.location + runCharRange.length); charIndex ++) {
                     NSPoint aPoint = [textSetter locationForGlyphAtIndex:[textSetter glyphIndexForCharacterAtIndex:charIndex]];
-                    [xs appendString:svgStringFromFloat(aPoint.x + lineFragmentRect.origin.x, @" ")];
-                    [ys appendString:svgStringFromFloat(aPoint.y + lineFragmentRect.origin.y, @" ")];
+                    [xs addObject:svgStringFromFloat(aPoint.x + lineFragmentRect.origin.x, nil)];
+                    [ys addObject:svgStringFromFloat(aPoint.y + lineFragmentRect.origin.y, nil)];
                 }
-                setStringAttribute(span, @"x", xs);
-                setStringAttribute(span, @"y", ys);
+                trimTrailingRepeats(xs);
+                setStringAttribute(span, @"x", [xs componentsJoinedByString:@" "]);
+                trimTrailingRepeats(ys);
+                setStringAttribute(span, @"y", [ys componentsJoinedByString:@" "]);
             } else {
                 NSPoint startPoint = [textSetter locationForGlyphAtIndex:lineFragmentRange.location];
                 setFloatAttribute(span, @"x", startPoint.x + lineFragmentRect.origin.x);

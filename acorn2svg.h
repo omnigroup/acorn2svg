@@ -84,6 +84,7 @@ BOOL boolForString(NSString *s);
 CGFloat floatForKey(NSDictionary *dict, NSString *key);
 void warns(NSString *msg);
 #define warnf(fmt, ...) warns([NSString stringWithFormat:fmt, ## __VA_ARGS__])
+void trimTrailingRepeats(NSMutableArray *);
 
 /* SVG Utilities */
 void assignNamespacePrefixes(NSXMLElement *elt);

@@ -204,3 +204,13 @@ void warns(NSString *msg)
     fputs([msg UTF8String], stderr);
     fputc('\n', stderr);
 }
+
+void trimTrailingRepeats(NSMutableArray *a)
+{
+    NSUInteger aCount = [a count];
+    
+    while (aCount >= 2 && [[a objectAtIndex:aCount-2] isEqual:[a objectAtIndex:aCount-1]]) {
+        [a removeObjectAtIndex:aCount-1];
+        aCount --;
+    }
+}
