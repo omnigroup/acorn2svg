@@ -15,7 +15,7 @@ become useful.
 ## Building
 
 ```shell
-git clone ...url... acorn2svg
+git clone https://github.com/omnigroup/acorn2svg.git acorn2svg
 cd acorn2svg
 make
 ```
