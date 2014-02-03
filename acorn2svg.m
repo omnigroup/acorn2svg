@@ -811,9 +811,7 @@ void generateSVGForTextArea(NSDictionary *obj, const NSRect *frame, NSXMLElement
                     [xs addObject:svgStringFromFloat(aPoint.x + lineFragmentRect.origin.x, nil)];
                     [ys addObject:svgStringFromFloat(aPoint.y + lineFragmentRect.origin.y, nil)];
                 }
-                trimTrailingRepeats(xs);
                 setStringAttribute(span, @"x", [xs componentsJoinedByString:@" "]);
-                trimTrailingRepeats(ys);
                 setStringAttribute(span, @"y", [ys componentsJoinedByString:@" "]);
             } else {
                 NSPoint startPoint = [textSetter locationForGlyphAtIndex:lineFragmentRange.location];
