@@ -817,6 +817,15 @@ void generateSVGForTextArea(NSDictionary *obj, const NSRect *frame, NSXMLElement
                 NSPoint startPoint = [textSetter locationForGlyphAtIndex:lineFragmentRange.location];
                 setFloatAttribute(span, @"x", startPoint.x + lineFragmentRect.origin.x);
                 setFloatAttribute(span, @"y", startPoint.y + lineFragmentRect.origin.y);
+                
+                if (!trimmedEOLChar && spanFont!=nil && runCharRange.length > 1) {
+                    /* Calculate a textLength value if we have an uncomplicated situation (nominal advances, no EOL jiggerypokery). This is optional but helps make sure text displays as we laid it out. */
+                    NSUInteger lastCharGlyph = [textSetter glyphIndexForCharacterAtIndex:runCharRange.location + runCharRange.length - 1];
+                    NSPoint endPoint = [textSetter locationForGlyphAtIndex:lastCharGlyph];
+                    NSSize lastGlyphNominalAdvance = [spanFont advancementForGlyph:[textSetter glyphAtIndex:lastCharGlyph]];
+                    setFloatAttribute(span, @"textLength", hypotf(endPoint.x + lastGlyphNominalAdvance.width - startPoint.x,
+                                                                  endPoint.y + lastGlyphNominalAdvance.height - startPoint.y));
+                }
             }
             
             nextGlyphToFind = lineFragmentRange.location + lineFragmentRange.length;
