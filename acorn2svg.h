@@ -96,4 +96,7 @@ void setFloatAttribute(NSXMLElement *elt, NSString *name, CGFloat value);
 static inline void setFloatAttributeSuffixed(NSXMLElement *elt, NSString *name, CGFloat value, NSString *suffix) {
     setStringAttribute(elt, name, svgStringFromFloat(value, suffix));
 }
+BOOL isCSSIdent(NSString *s);
+NSString *quoteCSSString(NSString *s);
+
 

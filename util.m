@@ -150,6 +150,105 @@ void removeRedundantGroups(NSXMLElement *nd)
     }
 }
 
+static NSCharacterSet *non_nmchars = nil;
+static NSCharacterSet *dubious_qstring = nil;
+static dispatch_once_t css_charsets_sem;
+static void css_charsets_init(void *dummy)
+{
+    NSMutableCharacterSet *cs = [[NSMutableCharacterSet alloc] init];
+    [cs addCharactersInRange:(NSRange){0, 255}];
+    [cs invert];
+    [cs formUnionWithCharacterSet:[NSCharacterSet alphanumericCharacterSet]];
+    [cs addCharactersInString:@"0123456789-_"];
+    [cs invert];
+    non_nmchars = [cs copy];
+    
+    cs = [[NSMutableCharacterSet alloc] init];
+    [cs addCharactersInRange:(NSRange){0, 31}];
+    [cs addCharactersInString:@"'\"\\"];
+    [cs formUnionWithCharacterSet:[NSCharacterSet controlCharacterSet]];
+    [cs formUnionWithCharacterSet:[NSCharacterSet illegalCharacterSet]];
+    dubious_qstring = [cs copy];
+}
+
+/* Check whether a string matches the CSS2 "IDENT" production in such a way that it represents itself in a CSS file (e.g., no backslashes) */
+BOOL isCSSIdent(NSString *s)
+{
+    NSUInteger len = [s length];
+    NSUInteger chIndex;
+
+    if (len < 1)
+        return NO;
+    chIndex = 0;
+    if ([s characterAtIndex:0] == '-')
+        chIndex = 1;
+    if (len < chIndex + 1)
+        return NO;
+
+    dispatch_once_f(&css_charsets_sem, NULL, css_charsets_init);
+
+    NSRange r = [s rangeOfCharacterFromSet:non_nmchars options:0 range:(NSRange){chIndex, len-chIndex}];
+    if (r.length > 0)
+        return 0;
+
+    if([@"0123456789_" rangeOfString:[s substringWithRange:[s rangeOfComposedCharacterSequenceAtIndex:chIndex]]].length != 0)
+        return NO;
+
+    return YES;
+}
+
+NSString *quoteCSSString(NSString *s)
+{
+    NSString *quoteCharacter;
+    NSString *otherQuoteCharacter;
+    
+    /* Use single-quotes, unless the string we're quoting has single-quotes but not double-quotes in it. */
+    if ([s rangeOfString:@"'"].length == 0 || [s rangeOfString:@"\""].length != 0) {
+        quoteCharacter = @"'";
+        otherQuoteCharacter = @"\"";
+    } else {
+        quoteCharacter = @"\"";
+        otherQuoteCharacter = @"'";
+    }
+    
+    dispatch_once_f(&css_charsets_sem, NULL, css_charsets_init);
+    
+    NSMutableString *buf = [s mutableCopy];
+    NSUInteger sindex = 0;
+    NSUInteger slen = [buf length];
+    while (sindex < slen) {
+        NSRange r = [buf rangeOfCharacterFromSet:dubious_qstring options:0 range:(NSRange){sindex, slen-sindex}];
+        if (r.length == 0)
+            break;
+        sindex += r.length;
+        
+        NSString *substr = [buf substringWithRange:r];
+        if (![substr isEqualToString:otherQuoteCharacter]) {
+            NSMutableString *escbuf = [[NSMutableString alloc] init];
+            for (NSUInteger subindex = 0; subindex < r.length; subindex ++) {
+                unichar ch = [substr characterAtIndex:subindex];
+                if (ch == '\\') {
+                    [escbuf appendString:@"\\\\"];
+                } else if (ch == '"') {
+                    [escbuf appendString:@"\\\""];
+                } else if (ch == '\'') {
+                    [escbuf appendString:@"\\'"];
+                } else {
+                    [escbuf appendFormat:@"\\%06X", ch];
+                }
+            }
+            [buf replaceCharactersInRange:r withString:escbuf];
+            sindex += [escbuf length] - r.length;
+            slen = [buf length];
+        }
+    }
+    
+    [buf replaceCharactersInRange:(NSRange){0, 0} withString:quoteCharacter];
+    [buf replaceCharactersInRange:(NSRange){[buf length], 0} withString:quoteCharacter];
+    
+    return buf;
+}
+
 #pragma mark Miscellaneous other utilities
 
 void warnIfUnknownKeys(NSDictionary *dict, NSArray *keys)
