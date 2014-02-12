@@ -56,6 +56,9 @@ NSMutableArray *usedImages = nil;
 CFMutableDictionaryRef shadowCache = NULL;
 unsigned int graphicRefSequence = 0;
 
+/* Globals used by font output */
+NSMutableDictionary *fontSpecCache = nil;
+
 /* SQLite functions */
 int selectAttribute(sqlite3 *dbh, NSData *layer, const char *attname, void (^)(sqlite3_stmt *, int));
 CFDataRef copyBlobValue(sqlite3_stmt *sth, int column);
@@ -77,13 +80,21 @@ void generateSVGForLine(NSDictionary *obj, const NSRect *frame, NSXMLElement *pa
 void generateSVGForPathGraphic(NSDictionary *obj, const NSRect *frame, NSXMLElement *parent);
 void generateSVGForShadow(NSDictionary *obj, NSXMLElement *parent, NSXMLElement *element);
 static void generateSVGShadowFilter(const void *, const void *, void *);
+static void generateSVGFontFace(const void *, const void *, void *); /* (NSFont *font, NSDictionary *fontAttributes, NSXMLElement *defs) */
 
 void applyPaint(NSXMLElement *elt, NSString *attr, NSString *alpha, NSData *encodedColor);
 void applyPaintForColor(NSXMLElement *elt, NSString *attr, NSString *alpha, NSColor *color);
 void applyLineJoin(NSXMLElement *elt, NSString *attr, NSObject *encodedJoin);
 void applyFillStroke(NSXMLElement *elt, BOOL hasFill, BOOL hasStroke, NSDictionary *obj);
+void applyFontAttributes(NSXMLElement *span, NSFont *spanFont);
 NSString *filterNameForShadow(NSDictionary *obj);
 NSString *svgOpsFromPath(NSBezierPath *p, const NSRect *frame);
+NSDictionary *computeAttributesForFont(NSFont *spanFont);
+
+/* Private declaration */
+@interface NSFont (AppleHatesTypographers)
+- (CTFontRef)ctFontRef;
+@end
 
 int main(int argc, char * const * argv)
 {
@@ -99,6 +110,7 @@ int main(int argc, char * const * argv)
             errx(1, "%s: not a sqlite3 db, and therefore not an Acorn file", acorn_filename);
             break;
         case SQLITE_CANTOPEN:
+        case SQLITE_IOERR:
             err(1, "%s: cannot open", acorn_filename);
             break;
         default:
@@ -139,6 +151,7 @@ int main(int argc, char * const * argv)
     imageTmpDir = CFURLCreateWithFileSystemPath(NULL, CFSTR("/tmp/images"), kCFURLPOSIXPathStyle, true);
     usedImages = [[NSMutableArray alloc] init];
     shadowCache = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    fontSpecCache = [[NSMutableDictionary alloc] init];
     graphicRefSequence = 0;
     
     /* Generate SVG of the layer tree */
@@ -170,11 +183,11 @@ int main(int argc, char * const * argv)
         
         [doc addSVGToElement:svgElt height:frameHeight dbh:dbh];
         
-        if (CFDictionaryGetCount(shadowCache) > 0) {
-            NSXMLElement *defsElement = [[NSXMLElement alloc] initWithName:@"defs" URI:kSVGNamespace];
+        NSXMLElement *defsElement = [[NSXMLElement alloc] initWithName:@"defs" URI:kSVGNamespace];
+        CFDictionaryApplyFunction(shadowCache, generateSVGShadowFilter, (void *)defsElement);
+        CFDictionaryApplyFunction((__bridge CFDictionaryRef)fontSpecCache, generateSVGFontFace, (void *)defsElement);
+        if ([defsElement childCount] > 0) {
             [svgElt insertChild:defsElement atIndex:0];
-            
-            CFDictionaryApplyFunction(shadowCache, generateSVGShadowFilter, (void *)defsElement);
         }
 
         /* Simplify our generated SVG */
@@ -733,7 +746,7 @@ void generateSVGForTextArea(NSDictionary *obj, const NSRect *frame, NSXMLElement
     [textSetter addTextContainer:box];
     [tstorage addLayoutManager:textSetter];
     
-    /* TODO: underlines, font weight and style, font stroke/outline, ... ? */
+    /* TODO: underlines, font stroke/outline, ... ? */
     
     /* Break up the laid-out text into <tspan>s. Font changes require a tspan change, and we also place each line fragment in a different tspan so that we don't have to emit the y-values for every character. */
     [tstorage enumerateAttributesInRange:(NSRange){0, [tstorage length]}
@@ -767,14 +780,17 @@ void generateSVGForTextArea(NSDictionary *obj, const NSRect *frame, NSXMLElement
                 continue;
             }
             
+            BOOL trimmedEOLChar;
             NSUInteger lineEndChar, lineContentsEndChar, endGlyphIndexToCareAboutPositioning;
             [[tstorage string] getLineStart:NULL end:&lineEndChar contentsEnd:&lineContentsEndChar forRange:runCharRange];
             if (lineContentsEndChar < (runCharRange.location + runCharRange.length) &&
                 lineEndChar >= (runCharRange.location + runCharRange.length)) {
                 /* Don't worry about the offsets of the EOL character */
                 endGlyphIndexToCareAboutPositioning = [textSetter glyphIndexForCharacterAtIndex:lineEndChar-1];
+                trimmedEOLChar = YES;
             } else {
                 endGlyphIndexToCareAboutPositioning = lineFragmentRange.location + lineFragmentRange.length;
+                trimmedEOLChar = NO;
             }
 
             /* Emit a <tspan> element for this character run */
@@ -782,19 +798,7 @@ void generateSVGForTextArea(NSDictionary *obj, const NSRect *frame, NSXMLElement
             [text addChild:span];
             [span addChild:[NSXMLNode textWithStringValue:[[tstorage string] substringWithRange:runCharRange]]];
             if (spanFont) {
-                setStringAttribute(span, @"font-family", [spanFont familyName]);
-                setStringAttribute(span, @"font-size", svgStringFromFloat([spanFont pointSize], nil));
-                
-                NSFontDescriptor *fontDesc = [spanFont fontDescriptor];
-                NSFontSymbolicTraits traits = [fontDesc symbolicTraits];
-                if (traits & NSFontItalicTrait)
-                    setStringAttribute(span, @"font-style", @"italic"); // AppKit doesn't distinguish between italic and oblique
-                if (traits & NSFontBoldTrait)
-                    setStringAttribute(span, @"font-weight", @"bold");
-                if (traits & NSFontExpandedTrait)
-                    setStringAttribute(span, @"font-stretch", @"expanded");
-                else if (traits & NSFontCondensedTrait)
-                    setStringAttribute(span, @"font-stretch", @"condensed");
+                applyFontAttributes(span, spanFont);
             }
             if (spanColor) {
                 applyPaintForColor(span, @"fill", @"fill-opacity", spanColor);
@@ -1180,4 +1184,156 @@ NSString *svgOpsFromPath(NSBezierPath *p, const NSRect *frame)
     
     return [ops componentsJoinedByString:@" "];
 }
+
+#pragma mark Font utilities
+
+void applyFontAttributes(NSXMLElement *span, NSFont *spanFont)
+{
+    NSDictionary *fontAttributes;
+    
+    /* The AppKit font system uniquely identifies a font by its name and point size (or matrix). */
+    NSString *fontName = [spanFont fontName];
+    fontAttributes = [fontSpecCache objectForKey:fontName];
+    if (!fontAttributes) {
+        fontAttributes = computeAttributesForFont(spanFont);
+        [fontSpecCache setObject:fontAttributes forKey:fontName];
+    }
+    
+    setFloatAttribute(span, @"font-size", [spanFont pointSize]);
+    [fontAttributes enumerateKeysAndObjectsUsingBlock:^(id attrName, id attrValue, BOOL *stop) {
+        setStringAttribute(span, attrName, attrValue);
+    }];
+}
+
+NSDictionary *computeAttributesForFont(NSFont *spanFont)
+{
+    NSMutableDictionary *attrs = [[NSMutableDictionary alloc] init];
+    NSFontDescriptor *fontDesc = [spanFont fontDescriptor];
+    NSFontSymbolicTraits traits = [fontDesc symbolicTraits];
+    NSInteger fontWeight = [[NSFontManager sharedFontManager] weightOfFont:spanFont];
+    
+    if (traits & NSFontItalicTrait) {
+        // AppKit doesn't distinguish between italic and oblique. If we're really not sure, SVG prefers us to specify "italic", because of the way its font matching rules work. But let's guess from the PostScript name of the font.
+        NSString *psName = [spanFont fontName];
+        NSRange italic = [psName rangeOfString:@"italic" options:NSBackwardsSearch|NSCaseInsensitiveSearch];
+        NSRange obliq = [psName rangeOfString:@"oblique" options:NSBackwardsSearch|NSCaseInsensitiveSearch];
+        if (obliq.length > 0 && (italic.length == 0 || italic.location < obliq.location))
+            [attrs setObject:@"oblique" forKey:@"font-style"];
+        else
+            [attrs setObject:@"italic" forKey:@"font-style"];
+    }
+    
+    if (traits & NSFontBoldTrait || fontWeight > 5) {
+        if(fontWeight == 7 || fontWeight <= 4)
+            [attrs setObject:@"bold" forKey:@"font-weight"];
+        else
+            [attrs setObject:[NSString stringWithFormat:@"%u", 100*(unsigned)fontWeight] forKey:@"font-weight"];
+    } else if (fontWeight < 5) {
+        /* CSS2 defines weight 400 as normal, and 100 is the lightest weight. AppKit defines weight 5 as normal, and 0 is the lightest weight. */
+        if (fontWeight == 4 || fontWeight == 3)
+            [attrs setObject:@"300" forKey:@"font-weight"];
+        else if (fontWeight == 2 || fontWeight == 1)
+            [attrs setObject:@"200" forKey:@"font-weight"];
+        else
+            [attrs setObject:@"100" forKey:@"font-weight"];
+    } else {
+        [attrs setObject:@"normal" forKey:@"font-weight"];
+    }
+    
+    if (traits & NSFontExpandedTrait)
+        [attrs setObject:@"expanded" forKey:@"font-stretch"];
+    else if (traits & NSFontCondensedTrait)
+        [attrs setObject:@"condensed" forKey:@"font-stretch"];
+    
+    NSString *familySpec = [spanFont familyName];
+    
+    familySpec = [familySpec precomposedStringWithCanonicalMapping];
+    if (!isCSSIdent(familySpec))
+        familySpec = quoteCSSString(familySpec);
+    
+    if ([spanFont isFixedPitch])
+        familySpec = [familySpec stringByAppendingString:@", monospace"];
+    
+    if ((traits & NSFontFamilyClassMask) == NSFontSansSerifClass) {
+        familySpec = [familySpec stringByAppendingString:@", sans-serif"];
+    } else if ((traits & NSFontFamilyClassMask) == NSFontScriptsClass) {
+        familySpec = [familySpec stringByAppendingString:@", cursive"];
+    } else if ((traits & NSFontFamilyClassMask) == NSFontOrnamentalsClass) {
+        familySpec = [familySpec stringByAppendingString:@", fantasy"];
+    } else if ((traits & NSFontFamilyClassMask) == NSFontOldStyleSerifsClass ||
+               (traits & NSFontFamilyClassMask) == NSFontTransitionalSerifsClass ||
+               (traits & NSFontFamilyClassMask) == NSFontModernSerifsClass ||
+               (traits & NSFontFamilyClassMask) == NSFontClarendonSerifsClass ||
+               (traits & NSFontFamilyClassMask) == NSFontSlabSerifsClass) {
+        familySpec = [familySpec stringByAppendingString:@", serif"];
+    }
+    
+    [attrs setObject:familySpec forKey:@"font-family"];
+    
+    return [attrs copy];
+}
+
+static void generateSVGFontFace(const void *fontName_, const void *fontAttributes_, void *defs_)
+{
+    NSString *fontName = (__bridge NSString *)fontName_;
+    NSDictionary *fontAttributes = (__bridge NSDictionary *)fontAttributes_;
+    NSXMLElement *defs = (__bridge NSXMLElement *)defs_;
+    
+    NSXMLElement *face = [[NSXMLElement alloc] initWithName:@"font-face" URI:kSVGNamespace];
+    [defs addChild:face];
+    
+    NSXMLElement *sources = [[NSXMLElement alloc] initWithName:@"font-face-src" URI:kSVGNamespace];
+    [face addChild:sources];
+    
+    NSXMLElement *localsource = [[NSXMLElement alloc] initWithName:@"font-face-name" URI:kSVGNamespace];
+    [sources addChild:localsource];
+    setStringAttribute(localsource, @"name", fontName);
+    
+    [fontAttributes enumerateKeysAndObjectsUsingBlock:^(id attrName, id attrValue, BOOL *stop) {
+        /* The font-family attribute is the only one that is different between the <font-face> element and the elements that reference it */
+        if ([attrName isEqualToString:@"font-family"])
+            return;
+        
+        /* We don't include the font-size in <font-face>; we assume fonts are scalable, or at least that it's not our problem */
+        if ([attrName isEqualToString:@"font-size"])
+            return;
+        
+        setStringAttribute(face, attrName, attrValue);
+    }];
+    
+    /* CSS2, and therefore SVG, specifies most font metrics with respect to the font's em-width. We'll assume that it's the same as the font's point size, which AFAIK is correct for AppKit/CoreText (and most computer font systems). */
+    CGFloat emWidth = 16.0;
+    NSFont *font = [NSFont fontWithName:fontName size:emWidth];
+
+    setStringAttribute(face, @"font-family", [font familyName]);
+
+    /* If we use CTFontGetUnitsPerEm(), we can emit these scaled to the font's actual underlying coordinate space, so that they are exact. However, there is no way to get to an NSFont's underlying CTFont without going through undocumented API like -[NSFont ctFontRef]. (This is because Apple's text people like to partially reinvent the wheel and then pretend that each new API is all you need. In recent versions of OSX, at least, you can go from a CTFont to a NSFont because they're toll-free bridged, but there's no documentation indicating the reverse is possible.) */
+    unsigned gridSize = CTFontGetUnitsPerEm([font ctFontRef]); /* Often 2048 */
+    
+    /* If not specified, SVG's units-per-em defaults to 1000 */
+    if (gridSize != 1000)
+        setStringAttribute(face, @"units-per-em", [NSString stringWithFormat:@"%u", gridSize]);
+    
+    CGFloat emScale = gridSize / emWidth;
+    
+    setFloatAttribute(face, @"ascent",               emScale * [font ascender]);
+    setFloatAttribute(face, @"descent",              emScale * [font descender]);
+    setFloatAttribute(face, @"cap-height",           emScale * [font capHeight]);
+    setFloatAttribute(face, @"x-height",             emScale * [font xHeight]);
+    setFloatAttribute(face, @"slope",                emScale * [font italicAngle]);
+    setFloatAttribute(face, @"underline-position",   emScale * [font underlinePosition]);
+    setFloatAttribute(face, @"underline-thickness",  emScale * [font underlineThickness]);
+    
+#if 0
+    NSRect bbox = [font boundingRectForFont];
+    if (!CGRectIsEmpty(bbox)) {
+        setStringAttribute(face, @"bbox", [NSString stringWithFormat:@"%@ %@ %@ %@",
+                                           svgStringFromFloat(emScale * bbox.origin.x, nil),
+                                           svgStringFromFloat(emScale * bbox.origin.y, nil),
+                                           svgStringFromFloat(emScale * (bbox.origin.x + bbox.size.width), nil),
+                                           svgStringFromFloat(emScale * (bbox.origin.y + bbox.size.height), nil)]);
+    }
+#endif
+}
+
 
