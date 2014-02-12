@@ -68,8 +68,6 @@ AcornLayer *copyLayerTree(sqlite3 *dbh);
 
 /* Image output/recoding functions */
 NSXMLElement *createImageElementFromData(NSString *uti, CFDataRef layerData, NSString *nameHint);
-CFURLRef tryWriteImage(CGImageSourceRef src, CFStringRef uti, CFURLRef tmpDir, CFDictionaryRef overrides);
-
 
 /* SVG Generation */
 void generateSVGForShape(NSDictionary *obj, const NSRect *frame, NSXMLElement *parent);
